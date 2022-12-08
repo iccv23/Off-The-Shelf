@@ -64,20 +64,8 @@ class PQLayer(nn.Module):
 
 		self._C = nn.Parameter(codebook, requires_grad=False)
 
-		# self._C = nn.Parameter(nn.init.xavier_uniform_(torch.empty(
-		# 	(self.M, self.K, self.D))), requires_grad=True)
-
-	# def codebookLoss(self):
-	# 	# [m, k, k]
-	# 	distance = ((self._C[:, :, None, ...] - self._C[:, None, ...]) ** 2).sum(-1)
-	# 	mask = torch.eye(self.K, device=self._C.device, dtype=self._C.dtype).expand(self.M, self.K, self.K) * 1e20
-	# 	# [M]
-	# 	minDistance = (distance + mask).reshape(self.M, -1).min(-1)[0]
-	# 	return -minDistance.log().sum()
-
 
 	def forward(self, x, *_):
-		# self._codebook_normalization()
 		# print("x:\n", x, "\nshape[bxfeat_dim]=", x.shape, end='\n\n')
 		# x:[bxd]=>[bxMxD]
 		x_ = x.reshape(x.shape[0], self.M, self.D)
@@ -133,7 +121,6 @@ class Encoder(nn.Module):
 		)
 		self.quantizer = PQLayer(semantic_dim, M, K, alpha)
 
-		# self.attention_layer = nn.Identity() # NonLocalBlock(feat_dim)
 
 		self.train_clases = train_classes
 		self.feat_dim = semantic_dim
@@ -141,12 +128,6 @@ class Encoder(nn.Module):
 		self.use_fp = False
 		self.register_buffer("secondOrderPrototypes", F.normalize(nn.init.xavier_uniform_(torch.empty(train_classes, semantic_dim))))
 		self.register_buffer("sampleCount", torch.zeros((train_classes, )))
-
-		# self.shadowNetwork = se_resnet50()
-		# feat_dim = self.shadowNetwork.last_linear.in_features
-		# self.shadowNetwork.last_linear = nn.Sequential(
-		# 	nn.Linear(feat_dim, semantic_dim)
-		# )
 
 		self.register_buffer("randomMask", torch.tensor([1] * int(train_classes * 0.85) + [0] * (train_classes - int(train_classes * 0.85))).bool())
 		self.randomMask.data.copy_(self.randomMask[torch.randperm(train_classes)])
@@ -171,14 +152,7 @@ class Encoder(nn.Module):
 		# [N, C]
 		randIdx = torch.stack([torch.randperm(self.train_clases) for _  in range(len(selfMask))])
 		randomMask = self.randomMask[randIdx]
-		# maskAmount = torch.randint(4, oneHot.shape[-1] - 4, (N, ))
 
-		# randomMask = list()
-		# for m in maskAmount:
-		# 	randIdx = torch.randperm(C)
-		# 	mask = torch.tensor([1] * m + [0] * (C - m), device=oneHot.device)[randIdx]
-		# 	randomMask.append(mask)
-		# randomMask = torch.stack(randomMask)
 		return torch.logical_or(selfMask, randomMask)
 
 	def extractFromMapper(self, features, quantizeds, classes, temperature):
@@ -187,22 +161,8 @@ class Encoder(nn.Module):
 
 		self.updateSecondOrderPrototypes(features, oneHot)
 
-
-		# features = self.extract(self.shadowNetwork, images)
-
 		# [N, C] bool mask, True-mask, False-visible
 		mask = self.generateMask(oneHot)
-
-
-		# features = self.shadowNetwork.features(images)
-
-		# out = self.shadowNetwork.avg_pool(features)
-		# if self.shadowNetwork.dropout is not None:
-		# 	out = self.shadowNetwork.dropout(out)
-
-		# features = out.view(out.size(0), -1)
-
-		# features = self.shadowNetwork.last_linear(features)
 
 
 		# use prototype to represent feature
@@ -235,7 +195,6 @@ class Encoder(nn.Module):
 	@staticmethod
 	def extract(se_resnet, img):
 		features = se_resnet.features(img)
-		# feat_attn = self.attention_layer(features)
 
 		out = se_resnet.avg_pool(features)
 		if se_resnet.dropout is not None:
@@ -266,7 +225,6 @@ class Encoder(nn.Module):
 
 	def forward(self, img, temperature):
 		features = self.extract(self.base_model, img)
-		# x = self.quantizer.intra_normalization(x)
 		return F.normalize(features), *self.quantizer(features, temperature)
 
 	def change_precision(self, type):
@@ -561,36 +519,15 @@ class Trainer:
 			# forward data and produce features and codes for 2 views
 			features, quantizeds, logits = self.model(images, self.temperature)
 
-			# con = self.model.trainMapper(features, quantizeds, classes[:, None].expand(n, m))
-
-			# if self.current_epoch < 2:
-			# features = features.reshape(n, m, -1)
-			# quantizeds = quantizeds.reshape(n, m, -1)
-
-
-			# 	# features = torch.cat([features, quantizeds], 1)
 			# 	# Optimize parameters
 			features, quantizeds = self.model.extractFromMapper(features, quantizeds, classes[:, None].expand(n, m), self.temperature)
 
 			con = crossAlignedContrastiveLoss(features, quantizeds, labels=classes)
 
-			# [1, k]
-			# logits = logits.mean((0, 1))[None, ...]
-			# entropy = F.cross_entropy(logits, torch.ones_like(logits) / self.model.quantizer.K)
-
-			# quantizeds = quantizeds.reshape(n, m, -1)
-			# reg = F.mse_loss((quantizeds ** 2).sum(-1), torch.ones(n, m, device=quantizeds.device))
-
-			# entropy = self.model.quantizer.codebookLoss()
-
 			loss = con # + reg + 1e-3 * entropy
 			loss.backward()
 
 			self.logger.add_scalar("train/con", con, self.step)
-			# self.logger.add_scalar("train/reg", reg, self.step)
-			# self.logger.add_scalar("train/unc", uncertainty, self.step)
-			# self.logger.add_scalar("train/ent", entropy, self.step)
-			# self.logger.add_scalar("train/mapping", mappingLoss, self.step)
 
 			self.optimizer.step()
 
@@ -603,16 +540,12 @@ class Trainer:
 			time_start = time_end
 
 			if (i + 1) % self.args.log_interval == 0:
-				# for i, l in enumerate(codes[:, range(self.args.num_codebooks)]):
-				# 	self.logger.add_histogram(f"train/codes{i}", l, self.step)
 				print('[Train] Epoch: [{0}/{1}][{2}/{3}]\t'
 					  # 'lr:{3:.6f}\t'
 					  'Time {batch_time.val:.3f} ({batch_time.avg:.3f})\t'
 					  'net {net.val:.4f} ({net.avg:.4f})\t'
 					  .format(self.current_epoch+1, self.args.epochs, i+1, len(self.train_loader), batch_time=batch_time, net=total_loss))
 
-			# if (i+1)==50:
-			#     break
 		if self.lr_scheduler is not None:
 
 			def step():
@@ -620,7 +553,6 @@ class Trainer:
 				for param_group in self.optimizer.param_groups:
 					param_group["lr"] = curr_lr * 0.8
 				return curr_lr
-			# curr_lr = self.lr_scheduler.step()
 			self.logger.add_scalar('train/lr', step(), self.step)
 		return {'net':total_loss.avg}
 
@@ -740,17 +672,6 @@ def evaluate(loader_sketch, loader_image, model, dict_clss):
 	allCodes = torch.cat(allCodes)
 	# [M, K]
 	allCodes = allCodes.sum(0)
-
-	# import matplotlib.pyplot as plt
-
-	# for i, c in enumerate(allCodes[:, range(allCodes.shape[-1])]):
-	# 	print(c.shape)
-	# 	c /= c.sum()
-	# 	print(c.max())
-	# 	plt.bar(range(len(c)), c.cpu().numpy(), color="black", edgecolor="black")
-	# 	plt.savefig(f"codes{i}.pdf")
-	# 	plt.clf()
-	# 	plt.close()
 
 	print('\nQuery Emb Dim:{}; Gallery Emb Dim:{}'.format(sketchEmbeddings.shape, realEmbeddings.shape))
 	eval_data = compute_retrieval_metrics(sketchEmbeddings, sketchLabels, realEmbeddings, realLabels)
